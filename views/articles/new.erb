@@ -1,7 +1,7 @@
 <div>
   <h1>New article</h1>
 
-  <%= partial("articles/form", locals: { article: @article, action: "/articles", method: "post" }) %>
+  <%== part("articles/_form", article: @article, action: "/articles", method: "post") %>
 
   <p><a href="/articles">Back to articles</a></p>
 </div>

@@ -1,5 +1,5 @@
 class Article < Sequel::Model
-  one_to_many :comments, key: :article_id, order: Sequel.desc(:created_at)
+  one_to_many :comments, order: Sequel.desc(:created_at)   # :key defaults to :article_id
 
   def validate
     super

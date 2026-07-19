@@ -7,41 +7,46 @@ require "rack/method_override"
 # A minimal, idiomatic Roda + Sequel blog.
 #
 # Domain-identical to roundhouse's `real-blog` Rails fixture (Article has_many
-# Comment) so the two can be diffed through the same IR / emitters. See README
-# for the Rails <-> Roda/Sequel mapping and the deliberate seams this exercises.
+# Comment) so the two can be diffed through the same IR / emitters. Where Rails
+# and idiomatic Roda/Sequel diverge, this app follows the Roda/Sequel idiom (and
+# the README notes the divergence) rather than transliterating Rails.
 class Blog < Roda
   # Browser forms can only POST; a hidden `_method` field carries the real verb
   # (PATCH/DELETE). This is the Roda-idiomatic equivalent of Rails' implicit
   # method override.
   use Rack::MethodOverride
 
-  plugin :render, layout: "layout"   # ERB templates in views/, wrapped in layout.erb
-  plugin :partials                   # partial("articles/article") -> views/articles/_article.erb
-  plugin :h                          # h(str) HTML-escape helper for user data
+  # `escape: true` makes `<%= %>` HTML-escape and `<%== %>` emit raw, so user
+  # data is escaped by default and only partial output is explicitly marked raw.
+  plugin :render, escape: true, layout: "layout"
+  plugin :part                       # part("articles/_form", article: @a) -> render partial w/ locals
   plugin :all_verbs                  # r.patch / r.delete (core Roda ships get/post only)
   plugin :sessions, secret: ENV.fetch("SESSION_SECRET") { "dev-secret-" + "0" * 53 }
   plugin :flash
   plugin :not_found do
-    response.status = 404
+    # 404 is already the status when the not_found handler runs; just render.
     view "not_found"
   end
 
   route do |r|
-    # GET / -> articles index (the app's root route)
+    # GET / -> canonical /articles. Idiomatic Roda avoids two paths serving the
+    # same content (Rails' root+index); redirect to the canonical one instead.
     r.root do
-      index
+      r.redirect "/articles"
     end
 
     r.on "articles" do
       # Collection level: /articles
       r.is do
-        r.get { index }
+        r.get do
+          @articles = Article.eager(:comments).reverse(:created_at).all
+          view "articles/index"
+        end
 
         # POST /articles
         r.post do
-          @article = Article.new(article_params)
-          if @article.valid?
-            @article.save
+          @article = Article.new.set_fields(r.params["article"], %w[title body])
+          if @article.save
             flash["notice"] = "Article was successfully created."
             r.redirect "/articles/#{@article.id}"
           else
@@ -50,8 +55,7 @@ class Blog < Roda
         end
       end
 
-      # GET /articles/new  (must be routed before the Integer matcher; "new" is
-      # not an integer so order is not load-bearing, but read intent-first)
+      # GET /articles/new
       r.get "new" do
         @article = Article.new
         view "articles/new"
@@ -59,29 +63,25 @@ class Blog < Roda
 
       # Member level: everything under /articles/:id
       #
-      # SEAM 1 (shared interior state): @article is loaded once at this interior
-      # node and consumed by every sub-branch (show, edit, update, destroy, and
-      # the nested comments routes).
-      #
-      # SEAM 2 (response returned at an interior node): the not-found check halts
-      # here, before any terminal matcher runs -- the routing-tree case the
-      # naive "split each terminal block into a handler" model does not cover.
+      # SEAM (shared interior state + interior abort): @article is loaded once at
+      # this interior node and consumed by every sub-branch (show, edit, update,
+      # destroy, and the nested comment routes). If it doesn't exist, `next`
+      # abandons the whole subtree at the interior node -- the block returns nil,
+      # so Roda treats the route as unhandled and the not_found handler renders a
+      # 404. This is the idiomatic "return/abort partway down the tree" case that
+      # a naive "split each terminal block into a handler" model does not capture;
+      # access-control failures use the same interior-node mechanism (with
+      # `r.halt` / `r.redirect` instead of `next`).
       r.on Integer do |id|
-        @article = Article[id]           # id : Integer, guaranteed by the matcher
-        unless @article
-          response.status = 404
-          response.write view("not_found")
-          r.halt
-        end
+        next unless @article = Article[id]   # id : Integer, guaranteed by the matcher
 
         r.is do
           r.get { view "articles/show" }
 
           # PATCH /articles/:id
           r.patch do
-            @article.set(article_params)
-            if @article.valid?
-              @article.save
+            @article.set_fields(r.params["article"], %w[title body])
+            if @article.save
               flash["notice"] = "Article was successfully updated."
               r.redirect "/articles/#{@article.id}"
             else
@@ -105,11 +105,14 @@ class Blog < Roda
         # Nested comments under the already-loaded @article
         r.on "comments" do
           # POST /articles/:id/comments
-          r.post do
-            @comment = Comment.new(comment_params)
+          #
+          # `r.post true` (not bare `r.post`): passing an argument makes Roda also
+          # check that the path is fully consumed, so POST /articles/1/comments/x
+          # falls through to a 404 instead of matching here.
+          r.post true do
+            @comment = Comment.new.set_fields(r.params["comment"], %w[commenter body])
             @comment.article = @article
-            if @comment.valid?
-              @comment.save
+            if @comment.save
               flash["notice"] = "Comment was successfully created."
             else
               flash["alert"] = "Could not create comment."
@@ -119,21 +122,14 @@ class Blog < Roda
 
           # DELETE /articles/:id/comments/:comment_id
           r.delete Integer do |comment_id|
-            comment = @article.comments_dataset.where(id: comment_id).first
-            comment&.destroy
+            next unless comment = @article.comments_dataset.with_pk(comment_id)
+            comment.destroy
             flash["notice"] = "Comment was successfully deleted."
             r.redirect "/articles/#{@article.id}"
           end
         end
       end
     end
-  end
-
-  # --- actions shared across routes -------------------------------------------
-
-  def index
-    @articles = Article.eager(:comments).order(Sequel.desc(:created_at)).all
-    view "articles/index"
   end
 
   # --- view helpers -----------------------------------------------------------
@@ -145,17 +141,5 @@ class Blog < Roda
 
   def pluralize(count, singular)
     "#{count} #{count == 1 ? singular : "#{singular}s"}"
-  end
-
-  private
-
-  # Strong-parameters analog: an explicit allow-list, in plain Ruby. Sequel's
-  # `set`/`new` assign every given column by default, so the slice IS the guard.
-  def article_params
-    (request.params["article"] || {}).slice("title", "body")
-  end
-
-  def comment_params
-    (request.params["comment"] || {}).slice("commenter", "body")
   end
 end

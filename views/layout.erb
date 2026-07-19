@@ -19,8 +19,8 @@
     </style>
   </head>
   <body>
-    <% if flash["notice"] %><p class="notice" id="notice"><%= h flash["notice"] %></p><% end %>
-    <% if flash["alert"] %><p class="alert" id="alert"><%= h flash["alert"] %></p><% end %>
-    <%= yield %>
+    <% if flash["notice"] %><p class="notice" id="notice"><%= flash["notice"] %></p><% end %>
+    <% if flash["alert"] %><p class="alert" id="alert"><%= flash["alert"] %></p><% end %>
+    <%== yield %>
   </body>
 </html>

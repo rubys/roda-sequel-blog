@@ -7,7 +7,7 @@
       <p>No articles found.</p>
     <% else %>
       <% @articles.each do |article| %>
-        <%= partial("articles/article", locals: { article: article }) %>
+        <%== part("articles/_article", article: article) %>
       <% end %>
     <% end %>
   </div>

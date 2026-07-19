@@ -2,10 +2,10 @@ Sequel.migration do
   change do
     create_table(:articles) do
       primary_key :id
-      String :title
-      String :body, text: true
-      DateTime :created_at
-      DateTime :updated_at
+      String :title, null: false
+      String :body, text: true, null: false
+      DateTime :created_at, null: false
+      DateTime :updated_at, null: false
     end
   end
 end

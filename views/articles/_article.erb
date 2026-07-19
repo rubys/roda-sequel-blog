@@ -1,9 +1,9 @@
 <div class="article" id="article_<%= article.id %>">
   <h2>
-    <a href="/articles/<%= article.id %>"><%= h article.title %></a>
+    <a href="/articles/<%= article.id %>"><%= article.title %></a>
     <span>(<%= pluralize(article.comments.size, "comment") %>)</span>
   </h2>
-  <p><%= h truncate(article.body) %></p>
+  <p><%= truncate(article.body) %></p>
   <p>
     <a href="/articles/<%= article.id %>">Show</a>
     <a href="/articles/<%= article.id %>/edit">Edit</a>

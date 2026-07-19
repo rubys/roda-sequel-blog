@@ -10,11 +10,16 @@ Rails fixture — `Article has_many :comments`, index/show/new/edit/create/updat
 destroy plus nested comment create/destroy — so the two can be run through the
 same typed IR and emitters and diffed. The question the exemplar exists to answer
 is *"where does the IR come out Roda/Sequel-shaped rather than Rails-shaped?"*,
-and a held-constant domain is what makes that diff legible.
+and a held-constant *domain* is what makes that diff legible.
 
-> **Status:** strawman for review. The point is to be told where this is *not*
-> idiomatic before anyone builds an ingest front-end against it.
-> cc @jeremyevans — corrections very welcome.
+Held-constant means the **domain**, not the **code**: where idiomatic Roda/Sequel
+and Rails diverge, this app takes the Roda/Sequel idiom and the mapping table
+below notes the divergence. Transliterating Rails into Roda would make a
+dishonest test — the whole point is to see the idiomatic stack's real shape.
+
+> **Status:** reviewed strawman. @jeremyevans reviewed the first cut in the
+> [RFC thread](https://github.com/rubys/roundhouse/issues/67); his notes are
+> folded in (see *Idiomatic choices adopted from review* below).
 
 ## Run it
 
@@ -46,12 +51,17 @@ config.ru               `run Blog.freeze.app`
 |---|---|
 | `config/routes.rb` `resources :articles` | `route do \|r\|` tree in `app.rb` |
 | `ArticlesController#index` etc. | terminal blocks in the routing tree |
-| `before_action :set_article` | `@article = Article[id]` at the `r.on Integer` interior node |
-| strong params `params.expect(article: […])` | `request.params["article"].slice("title","body")` |
+| `before_action :set_article` | `next unless @article = Article[id]` at the `r.on Integer` interior node |
+| root + index both render index | `r.root { r.redirect "/articles" }` — one canonical path, not two |
+| strong params `params.expect(article: […])` | `model.set_fields(r.params["article"], %w[title body])` |
 | `ActiveRecord::Base` | `Sequel::Model` |
 | `has_many`/`belongs_to` | `one_to_many`/`many_to_one` |
-| `Article.includes(:comments).order(...)` | `Article.eager(:comments).order(Sequel.desc(:created_at))` |
+| `Article.includes(:comments).order(created_at: :desc)` | `Article.eager(:comments).reverse(:created_at)` |
+| `save!` raises; controllers use `if save` | `Sequel::Model.raise_on_save_failure = false`, then `if model.save` (validates once) |
 | `validates :title, presence: true` | `validate` + `validates_presence` (validation_helpers plugin) |
+| DB defaults nullable; presence only in model | migrations declare `null: false` — Sequel leans on DB constraints |
+| ERB auto-escapes `<%= %>` | `render escape: true`: `<%= %>` escapes, `<%== %>` raw (no manual `h`) |
+| `render partial:`/`locals:` | `part("articles/_form", article: @a, …)` (part plugin) |
 | `db/migrate` (AR migrations) | `db/migrate` (Sequel migrations) |
 | `flash[:notice]`, `redirect_to` | `flash["notice"]`, `r.redirect` |
 | implicit `_method` override | `use Rack::MethodOverride` + `all_verbs` plugin |
@@ -68,10 +78,13 @@ capture — both live at the `r.on Integer do |id|` node in `app.rb`:
    handlers has to thread this shared state into each, not just duplicate prefix
    *code*.
 
-2. **A response returned at an interior node.** The not-found check `halt`s at the
-   interior node, before any terminal matcher runs — the "return a response
-   partway down the tree" case (access-control failures being the common
-   real-world instance).
+2. **An interior-node abort.** `next unless @article = Article[id]` abandons the
+   whole subtree at the interior node when the record is missing: the block
+   returns `nil`, Roda treats the route as unhandled, and the `not_found` handler
+   renders a 404 — the "stop partway down the tree" case, before any terminal
+   matcher runs. This is the idiomatic form; access-control failures use the same
+   interior-node mechanism but with `r.halt`/`r.redirect` (returning an explicit
+   response) instead of `next`.
 
 It also exercises the friendlier parts: a typed `Integer` matcher (`id` is known
 to be an integer at the call site — better inference input than a stringly
@@ -103,10 +116,39 @@ stays a clean A/B rather than a feature tour:
 ## Plugins used
 
 The minimal honest subset of @jeremyevans's "core browser-app" list for what this
-domain needs: `render` (+ `partials`, `h`), `sessions`, `flash`, `not_found`,
-plus `all_verbs` (so browser forms can PATCH/DELETE via `Rack::MethodOverride`).
+domain needs: `render` (with `escape: true`, so `<%= %>` HTML-escapes by default),
+`part` (partials with keyword locals), `sessions`, `flash`, `not_found`, plus
+`all_verbs` (so browser forms can PATCH/DELETE via `Rack::MethodOverride`).
 `assets`, `public`, `common_logger`, `error_handler` are intentionally omitted as
 runtime surface rather than IR-shape questions.
+
+## Idiomatic choices adopted from review
+
+Changes made after @jeremyevans's [review](https://github.com/rubys/roundhouse/issues/67),
+each taking the Roda/Sequel idiom over the Rails transliteration:
+
+- **`render escape: true`** — output escapes by default (`<%==` for raw), so the
+  manual `h(...)` calls and the `h` plugin are gone.
+- **`part` plugin** — `part("articles/_form", article: @a, …)` instead of
+  `partial(..., locals: {…})`.
+- **`set_fields`** — models take an explicit allow-list
+  (`set_fields(r.params["article"], %w[title body])`) rather than a strong-params
+  slice. (`typecast_params` for non-Hash param guarding is noted as available but
+  left out as overkill for a blog.)
+- **`raise_on_save_failure = false`** + `if model.save` — validates once, not
+  twice (no separate `valid?` call).
+- **`next unless` for missing records** — the idiomatic interior-node abort into
+  the `not_found` handler, for both a missing article and a missing comment
+  (the latter previously silently no-op'd; now a 404).
+- **`r.post true`** in the nested comments route — path-termination check, so
+  `POST /articles/1/comments/garbage` 404s instead of matching.
+- **`reverse(:created_at)`** instead of `order(Sequel.desc(:created_at))`.
+- **`with_pk`** instead of `where(id: …).first` for the comment lookup.
+- **`null: false` DB constraints** in the migrations — Sequel leans on the
+  database; validations remain in the model as defense in depth.
+- **`r.root` redirects to `/articles`** — one canonical path instead of two
+  identical pages.
+- **`one_to_many :comments`** drops the redundant `key: :article_id` (the default).
 
 ## License
 
