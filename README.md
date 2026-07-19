@@ -107,3 +107,7 @@ domain needs: `render` (+ `partials`, `h`), `sessions`, `flash`, `not_found`,
 plus `all_verbs` (so browser forms can PATCH/DELETE via `Rack::MethodOverride`).
 `assets`, `public`, `common_logger`, `error_handler` are intentionally omitted as
 runtime surface rather than IR-shape questions.
+
+## License
+
+MIT — see [MIT-LICENSE](MIT-LICENSE).
