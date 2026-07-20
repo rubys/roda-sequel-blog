@@ -1,5 +1,0 @@
-/db/*.db
-/.bundle
-/vendor/bundle
-*.gem
-.DS_Store
