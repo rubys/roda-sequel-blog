@@ -32,6 +32,19 @@ bundle exec rackup -p 9292     # http://localhost:9292
 SQLite, no external services. Migrations run automatically on boot (`db.rb`), so
 the app is runnable with no separate setup step.
 
+## Test it
+
+```sh
+bundle exec ruby test/blog_test.rb
+```
+
+`test/blog_test.rb` is an in-process (minitest + rack-test) spec of the full
+route surface: redirects, CRUD with valid and invalid input, flash messages via
+the session, the method-override form pattern, the interior-node 404s, the
+`r.post true` path-termination check, and default escaping. It doubles as the
+behavioral oracle for [roundhouse#67](https://github.com/rubys/roundhouse/issues/67):
+a transpiled version of this app must pass the same suite unchanged.
+
 ## Layout
 
 ```
@@ -43,6 +56,7 @@ db/migrate/*.rb         Sequel migration DSL (the schema)
 views/**/*.erb          ERB templates (layout + partials), rendered by Roda
 seeds.rb                sample data
 config.ru               `run Blog.freeze.app`
+test/blog_test.rb       in-process spec of the route surface (the oracle)
 ```
 
 ## Rails ↔ Roda/Sequel mapping

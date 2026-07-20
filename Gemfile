@@ -10,3 +10,8 @@ gem "tilt"      # template interface
 gem "rack"
 gem "rackup"    # `rackup` CLI
 gem "puma"      # app server
+
+group :test do
+  gem "minitest"
+  gem "rack-test"
+end
